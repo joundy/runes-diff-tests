@@ -8,6 +8,7 @@ const BITCOIN_RPC_USERNAME = process.env.BITCOIN_RPC_USERNAME;
 const BITCOIN_RPC_PASSWORD = process.env.BITCOIN_RPC_PASSWORD;
 
 const ORD_DIR_PATH = process.env.ORD_DIR_PATH;
+const ORD_HOST = process.env.ORD_HOST;
 const ORD_PORT = process.env.ORD_PORT;
 const ORD_EXECUTABLE_PATH = process.env.ORD_EXECUTABLE_PATH;
 
@@ -15,9 +16,114 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getBlockHeight() {
+function getRuneNumber(str) {
+  let number = 0n;
+
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str.charAt(i);
+    if (i > 0) {
+      number += 1n;
+    }
+    number *= 26n;
+    if (c >= "A" && c <= "Z") {
+      number += BigInt(c.charCodeAt(0) - "A".charCodeAt(0));
+    } else {
+      throw new Error(`Invalid character in rune name: ${c}`);
+    }
+  }
+
+  return number;
+}
+
+function parseSpacedRune(str) {
+  let runeStr = "";
+  let spacers = 0;
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+
+    // valid character
+    if (/[A-Z]/.test(char)) {
+      runeStr += char;
+    } else if (char === "." || char === "•") {
+      const flag = 1 << (runeStr.length - 1);
+      if ((spacers & flag) !== 0) {
+        throw new Error("Double spacer");
+      }
+
+      spacers |= flag;
+    } else {
+      throw new Error("Invalid spacer character");
+    }
+  }
+
+  if (32 - Math.clz32(spacers) >= runeStr.length) {
+    throw new Error("Trailing spacer");
+  }
+
+  return {
+    rune: getRuneNumber(runeStr),
+    spacers,
+  };
+}
+
+function compareJSON(json1, json2) {
+  function compare(obj1, obj2, path = "") {
+    if (Array.isArray(obj1) && Array.isArray(obj2)) {
+      if (obj1.length !== obj2.length) {
+        console.log(`Mismatch in array length at ${path}`);
+        return false;
+      }
+      for (let i = 0; i < obj1.length; i++) {
+        if (!compare(obj1[i], obj2[i], `${path}[${i}]`)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (
+      typeof obj1 === "object" &&
+      obj1 !== null &&
+      typeof obj2 === "object" &&
+      obj2 !== null
+    ) {
+      const keys1 = Object.keys(obj1);
+      const keys2 = Object.keys(obj2);
+
+      if (keys1.length !== keys2.length) {
+        console.log(`Mismatch in number of keys at ${path}`);
+        return false;
+      }
+
+      for (let i = 0; i < keys1.length; i++) {
+        if (keys1[i] !== keys2[i]) {
+          console.log(
+            `Mismatch in key order at ${path}: ${keys1[i]} vs ${keys2[i]}`,
+          );
+          return false;
+        }
+        if (!compare(obj1[keys1[i]], obj2[keys2[i]], `${path}.${keys1[i]}`)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (obj1 !== obj2) {
+      console.log(`Mismatch in value at ${path}: ${obj1} vs ${obj2}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  return compare(json1, json2);
+}
+
+async function ordGetRunesPaged(page) {
   const response = await axios.get(
-    "http://localhost:" + ORD_PORT + "/blockheight",
+    ORD_HOST + ":" + ORD_PORT + "/runes/" + page,
     {
       headers: {
         Accept: "application/json",
@@ -28,9 +134,19 @@ async function getBlockHeight() {
   return response.data;
 }
 
-async function getRunesBalances() {
+async function ordGetBlockHeight() {
+  const response = await axios.get(ORD_HOST + ":" + ORD_PORT + "/blockheight", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  return response.data;
+}
+
+async function ordGetRunesBalances() {
   const response = await axios.get(
-    "http://localhost:" + ORD_PORT + "/runes/balances",
+    ORD_HOST + ":" + ORD_PORT + "/runes/balances",
     {
       headers: {
         Accept: "application/json",
@@ -41,19 +157,7 @@ async function getRunesBalances() {
   return response.data;
 }
 
-async function getRune(runeName) {
-  const response = await axios.get(
-    "http://localhost:" + ORD_PORT + "/rune/" + runeName,
-    {
-      headers: {
-        Accept: "application/json",
-      },
-    },
-  );
-  return response.data;
-}
-
-function parseOutpoints(data) {
+function ordParseOutpoints(data) {
   const results = [];
   const dataKeys = Object.keys(data);
 
@@ -66,29 +170,88 @@ function parseOutpoints(data) {
     });
   }
 
+  results.sort((a, b) => {
+    if (a.hash < b.hash) return -1;
+    if (a.hash > b.hash) return 1;
+    return parseInt(a.index) - parseInt(b.index);
+  });
+
   return results;
 }
 
-async function captureState(height) {
-  const balances = await getRunesBalances();
-  const balancesKeys = Object.keys(balances);
+async function ordCaptureState(height) {
+  const [runes, balances] = await Promise.all([
+    ordGetRunes(),
+    ordGetRunesBalances(),
+  ]);
 
-  const results = [];
-  for (const key of balancesKeys) {
-    const rune = await getRune(key);
-    results.push({
-      ...rune,
-      outpoints: parseOutpoints(balances[key]),
-    });
+  for (let i = 0; i < runes.length; i++) {
+    const rune = runes[i];
+    const runeBalances = balances[rune.spaced_rune];
+    const outpoints = runeBalances ? ordParseOutpoints(runeBalances) : [];
+    runes[i].outpoints = outpoints;
+
+    delete runes[i].spaced_rune;
   }
 
-  fs.writeFile(
-    `json-tests/${height}-runes.json`,
-    JSON.stringify({ height, runes: results }, null, 2),
-  );
+  fs.writeFile(`ord-states/${height}.json`, JSON.stringify(runes, null, 2));
 }
 
-async function updateIndex(height) {
+async function ordGetRunes() {
+  let page = 0;
+  let runes = [];
+
+  while (true) {
+    console.log(page);
+
+    const data = await ordGetRunesPaged(page);
+    if (page !== 0) {
+      data.entries.shift();
+    }
+
+    for (const runeData of data.entries) {
+      const idSplit = runeData[0].split(":");
+      const entry = runeData[1];
+
+      const { rune, spacers } = parseSpacedRune(entry.spaced_rune);
+
+      runes.push({
+        number: entry.number,
+        block: parseInt(idSplit[0]),
+        tx: parseInt(idSplit[1]),
+        minted: entry.mints,
+        burned: entry.burned,
+        divisibility: entry.divisibility,
+        premine: entry.premine,
+        rune: rune.toString(),
+        spacers,
+        spaced_rune: entry.spaced_rune,
+        symbol: entry.symbol || null,
+        turbo: entry.turbo,
+        terms: entry.terms
+          ? {
+            amount: entry.terms.amount || null,
+            cap: entry.terms.cap || null,
+            height_start: entry.terms.height[0] || null,
+            height_end: entry.terms.height[1] || null,
+            offset_start: entry.terms.offset[0] || null,
+            offset_end: entry.terms.offset[1] || null,
+          }
+          : null,
+      });
+    }
+
+    if (!data.more) {
+      break;
+    }
+
+    page++;
+  }
+
+  return runes.reverse();
+}
+
+async function ordUpdateIndex(height) {
   const args = [
     "--chain",
     "mainnet",
@@ -131,7 +294,7 @@ async function updateIndex(height) {
   });
 }
 
-async function spawnServer(height) {
+async function ordSpawnServer(height) {
   const args = [
     "--chain",
     "mainnet",
@@ -175,13 +338,11 @@ async function spawnServer(height) {
       console.info("info.waiting for the server to be up");
       let blockheight = -1;
       try {
-        blockheight = await getBlockHeight();
+        blockheight = await ordGetBlockHeight();
       } catch (error) {
         console.info("info.server is not up yet");
         continue;
       }
-
-      console.log({ blockheight });
 
       if (blockheight === height) {
         console.info("info.server is up");
@@ -196,20 +357,37 @@ async function spawnServer(height) {
     }
 
     console.info("info.capturing the state on height: ", height);
-    await captureState(height);
+    await ordCaptureState(height);
 
     console.info("info.kill the server");
     s.kill("SIGINT");
   });
 }
 
-async function main() {
-  for (let i = 0; i < 3; i++) {
-    const height = 840000 + i;
-    await updateIndex(height);
-    const result = await spawnServer(height);
+async function capturingStates(fromHeight, toHeight) {
+  // capturing ord states
+  for (let i = 0; i <= toHeight; i++) {
+    const h = fromHeight + i;
+    await ordUpdateIndex(h);
+    const result = await ordSpawnServer(h);
     console.log({ result });
   }
+}
+
+async function runDiff() {
+  const height = 840000;
+  const ordStateRunes = require(`./ord-states/${height}.json`);
+  const smartindexStateRunes = require(`./smartindex-states/${height}.json`);
+
+  const result = compareJSON(ordStateRunes, smartindexStateRunes);
+  if (result) {
+    console.info("info.both states are same");
+  }
+}
+
+async function main() {
+  await ordCaptureState(840000);
+  // runDiff();
 }
 
 main();

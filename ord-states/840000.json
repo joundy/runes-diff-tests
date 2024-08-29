@@ -1,0 +1,52 @@
+[
+  {
+    "number": 0,
+    "block": 840000,
+    "tx": 2994,
+    "minted": "0",
+    "burned": "0",
+    "divisibility": 0,
+    "premine": "4000000",
+    "rune": "194831792997412806415720180",
+    "spacers": 16904,
+    "symbol": "🚬",
+    "turbo": true,
+    "terms": {
+      "amount": "1",
+      "cap": "416202469",
+      "height_start": null,
+      "height_end": null,
+      "offset_start": null,
+      "offset_end": null
+    },
+    "outpoints": [
+      {
+        "hash": "e023b2a6deacf640e09caf2b93fbc77e22d8dbdcf0924d617b89d5832843bf68",
+        "index": "1",
+        "amount": "4000000"
+      }
+    ]
+  },
+  {
+    "number": 1,
+    "block": 840000,
+    "tx": 3018,
+    "minted": "0",
+    "burned": "0",
+    "divisibility": 0,
+    "premine": "0",
+    "rune": "1310534015847673235157",
+    "spacers": 68,
+    "symbol": "🧿",
+    "turbo": false,
+    "terms": {
+      "amount": "1000",
+      "cap": "21000000",
+      "height_start": null,
+      "height_end": null,
+      "offset_start": null,
+      "offset_end": null
+    },
+    "outpoints": []
+  }
+]
