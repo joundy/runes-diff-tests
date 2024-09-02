@@ -386,8 +386,8 @@ async function runDiff() {
 }
 
 async function main() {
-  await ordCaptureState(840000);
-  // runDiff();
+  // await ordCaptureState(840000);
+  runDiff();
 }
 
 main();
